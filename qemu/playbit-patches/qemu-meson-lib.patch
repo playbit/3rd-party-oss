@@ -1,0 +1,39 @@
+1. Fixes a bug in meson.build preventing coreaudio audio backend from building;
+   objc source can't be compiled unless 'cocoa' is enabled.
+2. Build qemu as a shared library instead of an executable
+--- a/meson.build 2024-02-19 15:34:45.000000000 -0800
++++ b/meson.build 2024-02-19 15:34:52.000000000 -0800
+@@ -25,7 +25,7 @@
+   cxx = meson.get_compiler('cpp')
+ endif
+ if targetos == 'darwin' and \
+-   add_languages('objc', required: get_option('cocoa'), native: false)
++   add_languages('objc', required: get_option('cocoa').allowed() or get_option('coreaudio').allowed(), native: false)
+   all_languages += ['objc']
+   objc = meson.get_compiler('objc')
+ endif
+@@ -3880,20 +3880,20 @@
+   endif
+   foreach exe: execs
+     exe_name = exe['name']
+-    if targetos == 'darwin'
++    if targetos == 'darwin_DISABLED'
+       exe_name += '-unsigned'
+     endif
+ 
+-    emulator = executable(exe_name, exe['sources'],
++    emulator = shared_library(exe_name, exe['sources'],
+                install: true,
+                c_args: c_args,
+                dependencies: arch_deps + deps + exe['dependencies'],
+                objects: lib.extract_all_objects(recursive: true),
+                link_depends: [block_syms, qemu_syms] + exe.get('link_depends', []),
+                link_args: link_args,
+-               win_subsystem: exe['win_subsystem'])
++               cpp_args: '-Dmain=pb_qemu_main_' + target_name)
+ 
+-    if targetos == 'darwin'
++    if targetos == 'darwin_DISABLED'
+       icon = 'pc-bios/qemu.rsrc'
+       build_input = [emulator, files(icon)]
+       install_input = [

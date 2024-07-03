@@ -1,0 +1,160 @@
+--- a/chardev/char-machport.c	1970-01-01 01:00:00
++++ b/chardev/char-machport.c	2024-04-10 16:51:02
+@@ -0,0 +1,119 @@
++/*
++ * QEMU System Emulator
++ *
++ * Copyright (c) 2003-2008 Fabrice Bellard
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/main-loop.h"
++#include "qemu/module.h"
++#include "qemu/option.h"
++#include "chardev/char.h"
++
++#include <CoreFoundation/CoreFoundation.h>
++
++struct PBMachPortChardev {
++    Chardev parent;
++    CFMessagePortRef port;
++    uint32_t index;
++};
++typedef struct PBMachPortChardev PBMachPortChardev;
++
++DECLARE_INSTANCE_CHECKER(PBMachPortChardev, MACHPORT_CHARDEV,
++                         TYPE_CHARDEV_MACHPORT)
++
++static int qemu_chr_write_machport(Chardev *chr, const uint8_t *buf, int len)
++{
++    PBMachPortChardev *dev = MACHPORT_CHARDEV(chr);
++    CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, buf, len,
++		    kCFAllocatorNull);
++    SInt32 error = CFMessagePortSendRequest(dev->port, dev->index, data, 10.0, 10.0, NULL, NULL);
++    if (error != kCFMessagePortSuccess) { fprintf(stderr, "CFMessagePortSendRequest failed (%d).\n", error); }
++    dev->index++;
++    CFRelease(data);
++    return len;
++}
++
++static void qemu_chr_finalize_machport(Object *obj)
++{
++    PBMachPortChardev *dev = MACHPORT_CHARDEV(obj);
++    if (dev->port) {
++        CFRelease(dev->port);
++    }
++}
++
++static void qemu_chr_open_machport(Chardev *chr,
++                          ChardevBackend *backend,
++                          bool *be_opened,
++                          Error **errp)
++{
++    PBMachPortChardev *dev = MACHPORT_CHARDEV(chr);
++    ChardevHostdev *opts = backend->u.machport.data;
++    CFStringRef portName = CFStringCreateWithCString(NULL, opts->device,
++		    kCFStringEncodingUTF8);
++    dev->port = CFMessagePortCreateRemote(NULL, portName);
++    dev->index = 0;
++    CFRelease(portName);
++    if (!dev->port) {
++	error_setg(errp, "chardev: machport: could not open port");
++    }
++}
++
++static void qemu_chr_parse_machport(QemuOpts *opts, ChardevBackend *backend,
++                                Error **errp)
++{
++    const char *device = qemu_opt_get(opts, "path");
++    ChardevHostdev *dev;
++
++    if (device == NULL) {
++        error_setg(errp, "chardev: machport: no device path given");
++        return;
++    }
++    backend->type = CHARDEV_BACKEND_KIND_MACHPORT;
++    dev = backend->u.machport.data = g_new0(ChardevHostdev, 1);
++    qemu_chr_parse_common(opts, qapi_ChardevHostdev_base(dev));
++    dev->device = g_strdup(device);
++}
++
++static void qemu_chr_class_init_machport(ObjectClass *oc, void *data)
++{
++    ChardevClass *cc = CHARDEV_CLASS(oc);
++
++    cc->parse = qemu_chr_parse_machport;
++    cc->open = qemu_chr_open_machport;
++    cc->chr_write = qemu_chr_write_machport;
++}
++
++static const TypeInfo char_machport_type_info = {
++    .name = TYPE_CHARDEV_MACHPORT,
++    .parent = TYPE_CHARDEV,
++    .instance_size = sizeof(PBMachPortChardev),
++    .instance_finalize = qemu_chr_finalize_machport,
++    .class_init = qemu_chr_class_init_machport,
++};
++
++static void register_types(void)
++{
++    type_register_static(&char_machport_type_info);
++}
++
++type_init(register_types);
+--- a/chardev/meson.build	2024-01-29 19:13:21
++++ b/chardev/meson.build	2024-04-10 16:30:17
+@@ -2,6 +2,7 @@
+   'char-fe.c',
+   'char-file.c',
+   'char-io.c',
++  'char-machport.c',
+   'char-mux.c',
+   'char-null.c',
+   'char-pipe.c',
+--- a/include/chardev/char.h	2024-01-29 19:13:22
++++ b/include/chardev/char.h	2024-04-10 16:30:34
+@@ -237,6 +237,7 @@
+ #define TYPE_CHARDEV_CONSOLE "chardev-console"
+ #define TYPE_CHARDEV_STDIO "chardev-stdio"
+ #define TYPE_CHARDEV_PIPE "chardev-pipe"
++#define TYPE_CHARDEV_MACHPORT "chardev-machport"
+ #define TYPE_CHARDEV_MEMORY "chardev-memory"
+ #define TYPE_CHARDEV_PARALLEL "chardev-parallel"
+ #define TYPE_CHARDEV_FILE "chardev-file"
+--- a/qapi/char.json	2024-01-29 19:13:22
++++ b/qapi/char.json	2024-04-10 16:30:56
+@@ -475,6 +475,7 @@
+             'serial',
+             'parallel',
+             'pipe',
++            'machport',
+             'socket',
+             'udp',
+             'pty',
+@@ -617,6 +618,7 @@
+             'serial': 'ChardevHostdevWrapper',
+             'parallel': 'ChardevHostdevWrapper',
+             'pipe': 'ChardevHostdevWrapper',
++            'machport': 'ChardevHostdevWrapper',
+             'socket': 'ChardevSocketWrapper',
+             'udp': 'ChardevUdpWrapper',
+             'pty': 'ChardevCommonWrapper',

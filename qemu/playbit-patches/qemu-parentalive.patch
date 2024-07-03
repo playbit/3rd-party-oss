@@ -1,0 +1,27 @@
+--- a/system/main.c	2024-01-29 19:13:22
++++ b/system/main.c	2024-04-12 15:27:41
+@@ -42,8 +42,24 @@
+
+ int (*qemu_main)(void) = qemu_default_main;
+
++int parentAliveFD;
++
++static void *ParentAliveThread(void *param) {
++    (void) param;
++    uint8_t c;
++    while (read(parentAliveFD, &c, 1));
++    exit(1);
++}
++
+ int main(int argc, char **argv)
+ {
++    parentAliveFD = open("/tmp/playbit-parent-alive", O_RDONLY);
++
++    if (parentAliveFD != -1) {
++        pthread_t thread;
++        pthread_create(&thread, NULL, ParentAliveThread, NULL);
++    }
++
+     qemu_init(argc, argv);
+     return qemu_main();
+ }
