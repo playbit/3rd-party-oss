@@ -283,8 +283,8 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
  #ifdef FEAT_GUI_HAIKU
 diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90_original/src/gui_playbit.c vim90/src/gui_playbit.c
 --- vim90_original/src/gui_playbit.c	1970-01-01 01:00:00
-+++ vim90/src/gui_playbit.c	2024-07-02 15:14:37
-@@ -0,0 +1,1168 @@
++++ vim90/src/gui_playbit.c	2024-10-14 15:23:53
+@@ -0,0 +1,1223 @@
 +#define _GNU_SOURCE
 +#include <assert.h>
 +#include <float.h>
@@ -295,6 +295,11 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +#include "vim.h"
 +#include "globals.h"
 +#include "version.h"
++
++typedef struct TextCharacter {
++	char utf8Bytes[4];
++	int widthInCells;
++} TextCharacter;
 +
 +typedef struct Event {
 +	// Events from the UI to Vim:
@@ -447,20 +452,35 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +
 +static void ProcessEventToUI(Event event) {
 +	if (event.type == EVENT_TEXT) {
-+		int i = 0, y = event.di[0];
++		int i = 0, x = event.di[1], y = event.di[0];
 +		// fprintf(stderr, "EVENT_TEXT %d %d-%d %x\n", event.di[0], event.di[1], event.di[1] + strlen(event.text) - 1, event.di[2]);
++		TextCharacter *array = (TextCharacter *) event.text;
 +
-+		for (int x = event.di[1]; event.text[i]; i++, x++) { 
-+			if (y < 0 || x < 0 || y >= gui.uiNumRows || x >= gui.uiNumCols) { continue; }
-+			int j = y * gui.uiNumCols + x;
-+			gui.uiCells[j].character = event.text[i]; 
-+			gui.uiCells[j].flags = event.di[2];
-+			gui.uiCells[j].foreground = gui.uiFgColor;
-+			gui.uiCells[j].background = gui.uiBgColor;
-+			if (x == gui.uiCursorColumn && y == gui.uiCursorRow && !(event.di[2] & DRAW_TRANSP)) { gui.uiCursorState = 0; }
++		for (int i = 0; i < event.di[3]; i++) { 
++			for (int k = 0; k < array[i].widthInCells; k++, x++) {
++				if (y < 0 || x < 0 || y >= gui.uiNumRows || x >= gui.uiNumCols) { continue; }
++
++				int j = y * gui.uiNumCols + x;
++
++				if (k) {
++					memset(&gui.uiCells[j].utf8Bytes[0], 0,
++							sizeof(array[i].utf8Bytes));
++				} else {
++					memcpy(&gui.uiCells[j].utf8Bytes[0], &array[i].utf8Bytes[0],
++							sizeof(array[i].utf8Bytes));
++				}
++
++				gui.uiCells[j].flags = event.di[2];
++				gui.uiCells[j].foreground = gui.uiFgColor;
++				gui.uiCells[j].background = gui.uiBgColor;
++
++				if (x == gui.uiCursorColumn && y == gui.uiCursorRow && !(event.di[2] & DRAW_TRANSP)) {
++					gui.uiCursorState = 0;
++				}
++			}
 +		}
 +
-+		REPAINT(event.di[0], event.di[1], 1, i);
++		REPAINT(event.di[0], event.di[1], 1, x - event.di[1]);
 +	} else if (event.type == EVENT_RESIZE) {
 +		if (gui.uiNumRows != event.di[4] || gui.uiNumCols != event.di[5] || gui.uiCharWidth != event.di[0] 
 +				|| gui.uiCharHeight != event.di[1] || gui.uiFontSize != event.di[2]) {
@@ -470,11 +490,12 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +			gui.uiNumRows = event.di[4];
 +			gui.uiNumCols = event.di[5];
 +			gui.uiCells = (UICell *) realloc(gui.uiCells, gui.uiNumRows * gui.uiNumCols * sizeof(UICell));
-+			gui.uiRowBuffer = (char *) realloc(gui.uiRowBuffer, gui.uiNumCols);
++			gui.uiRowBuffer = (char *) realloc(gui.uiRowBuffer, gui.uiNumCols * 4 /* utf-8 bytes */);
 +			gui.uiCursorState = 0;
 +
 +			for (int j = 0; j < gui.uiNumRows * gui.uiNumCols; j++) {
-+				gui.uiCells[j].character = ' ';
++				gui.uiCells[j].utf8Bytes[0] = ' ';
++				gui.uiCells[j].utf8Bytes[1] = 0;
 +				gui.uiCells[j].flags = 0;
 +				gui.uiCells[j].foreground = gui.uiFgColor;
 +				gui.uiCells[j].background = gui.uiBgColor;
@@ -487,7 +508,8 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +			for (int x = event.di[1]; x <= event.di[3]; x++) {
 +				if (y < 0 || x < 0 || y >= gui.uiNumRows || x >= gui.uiNumCols) { continue; }
 +				int j = y * gui.uiNumCols + x;
-+				gui.uiCells[j].character = ' ';
++				gui.uiCells[j].utf8Bytes[0] = ' ';
++				gui.uiCells[j].utf8Bytes[1] = 0;
 +				gui.uiCells[j].foreground = gui.uiFgColor;
 +				gui.uiCells[j].background = gui.uiBackPixel;
 +				gui.uiCells[j].flags = 0;
@@ -646,6 +668,10 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +	}
 +}
 +
++static void ProcessAllEventsToUI2(PB_UNUSED PBEventSource *source, PB_UNUSED PBEventType type) {
++	ProcessAllEventsToUI(false);
++}
++
 +static intptr_t WindowMessage(PBElement *element, PBMessage *message) {
 +	if (message->type == PBMsg_WINDOW_ACTIVATE) {
 +		ProcessAllEventsToUI(true);
@@ -659,8 +685,6 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +		Event event = { .type = EVENT_CLOSE };
 +		WriteEvent(gui.eventsToVim[1], &event);
 +		return 1;
-+	} else if (message->type == PBMsg_EXTERNAL_SOURCE_READY) {
-+		ProcessAllEventsToUI(false);
 +	}
 +
 +	return 0;
@@ -674,6 +698,8 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +		PBColor clearColor = PBColorFromSRGB8(gui.uiBackPixel);
 +		PBDrawRectangle(painter, PB_RECT_4(0, size.width, gui.uiCharHeight * gui.uiNumRows, size.height), clearColor);
 +		PBDrawRectangle(painter, PB_RECT_4(gui.uiCharWidth * gui.uiNumCols, size.width, 0, gui.uiCharHeight * gui.uiNumRows), clearColor);
++
++		int bytesInBuffer = 0;
 +
 +		for (int i = 0; i < gui.uiNumRows; i++) {
 +			PBRectangle row = PB_RECT_4PD(0, i * gui.uiCharHeight, size.width, gui.uiCharHeight);
@@ -693,7 +719,7 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +							{ .attribute = { .type = PBTextAttribute_SIZE, .f32 = (float) gui.uiFontSize } },
 +						};
 +
-+						PBTextPlan *textPlan = PBTextPlanCreate(PB_STR(gui.uiRowBuffer, j - start), &attributes[0], 
++						PBTextPlan *textPlan = PBTextPlanCreate(PB_STR(gui.uiRowBuffer, bytesInBuffer), &attributes[0], 
 +								sizeof(attributes) / sizeof(attributes[0]), PBTextStyleID_MONOSPACED, NULL);
 +
 +						if (textPlan) {
@@ -705,11 +731,18 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +							PBTextPlanRelease(textPlan);
 +						}
 +
++						bytesInBuffer = 0;
 +						start = j;
 +					}
 +
 +					if (j < gui.uiNumCols) {
-+						gui.uiRowBuffer[j - start] = jCell->character;
++						for (int k = 0; k < 4; k++) {
++							if (!jCell->utf8Bytes[k]) {
++								break;
++							}
++
++							gui.uiRowBuffer[bytesInBuffer++] = jCell->utf8Bytes[k];
++						}
 +					}
 +				}
 +			}
@@ -783,10 +816,13 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +			PBElementSetUserMessageHandler((PBElement *) gui.window,
 +					PBElementMessageHandler_Make(WindowMessage));
 +			gui.textArea = PBElementAdd((PBElement *) gui.window,
-+					PBElement_CUSTOM_PAINT | PBElement_CUSTOM_LAYOUT | PB_ELEMENT_INPUT_MOUSE_ALL,
++					PBElement_CUSTOM_PAINT | PBElement_CUSTOM_LAYOUT | PBElement_INPUT_MOUSE_ALL,
 +					PBElementMessageHandler_Make(TextAreaMessage));
 +			PBElementFocus(gui.textArea, 0);
-+			PBExternalEventSourceAdd(gui.eventsToUI[0], (PBElement *) gui.window);
++			PBEventSource *source = PBEventSourceCreateFromFD(gui.eventsToUI[0], false);
++			PBEventSourceSetHandler(source, PBEventHandler_Make(ProcessAllEventsToUI2));
++			PBEventSourceSetFlags(source, PBEventSourceFlags_READ);
++			PBEventSourceActivate(source);
 +		} else {
 +			message->appCreate.window = gui.window;
 +			PBElementRetain((PBElement *) gui.window);
@@ -1028,7 +1064,26 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +
 +void gui_mch_draw_string(int row, int col, char_u *s, int len, int flags) {
 +	// fprintf(stderr, "** DRAW STRING '%.*s' (%d,%d) %x **\n", len, s, row, col, flags);
-+	Event event = { .type = EVENT_TEXT, .text = strndup((char *) s, len), .di = { row, col, flags } };
++	size_t characterCount = mb_charlen_len(s, len);
++	TextCharacter *array = (TextCharacter *) malloc(sizeof(TextCharacter) * characterCount);
++	Event event = { .type = EVENT_TEXT, .text = (char *) array,
++		.di = { row, col, flags, characterCount } };
++
++	for (int i = 0; i < characterCount; i++) {
++		size_t bytesInCharacter = mb_ptr2len(s);
++
++		if (bytesInCharacter <= 4) {
++			memcpy(&array[i].utf8Bytes[0], s, bytesInCharacter);
++			memset(&array[i].utf8Bytes[bytesInCharacter], 0, 4 - bytesInCharacter);
++		} else {
++			array[i].utf8Bytes[0] = '?';
++			array[i].utf8Bytes[1] = 0;
++		}
++
++		array[i].widthInCells = mb_string2cells(s, bytesInCharacter);
++		s += bytesInCharacter;
++	}
++
 +	WriteEvent(gui.eventsToUI[1], &event);
 +}
 +
@@ -1455,14 +1510,15 @@ diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90
 +}
 diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90_original/src/gui_playbit.h vim90/src/gui_playbit.h
 --- vim90_original/src/gui_playbit.h	1970-01-01 01:00:00
-+++ vim90/src/gui_playbit.h	2024-06-28 13:35:50
-@@ -0,0 +1,7 @@
++++ vim90/src/gui_playbit.h	2024-10-10 15:41:00
+@@ -0,0 +1,8 @@
 +#define _PB_DECLARE_PRIVATE_APIS
 +#include <playbit/playbit.h>
 +
 +typedef struct UICell {
 +	uint32_t foreground, background;
-+	int character, flags;
++	int flags;
++	char utf8Bytes[4];
 +} UICell;
 diff --new-file -u -x *.swp -x .DS_Store -x configure -x autom4te.cache -r vim90_original/src/gui_xim.c vim90/src/gui_xim.c
 --- vim90_original/src/gui_xim.c	2022-05-26 13:12:57
