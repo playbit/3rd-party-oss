@@ -1,0 +1,1 @@
+https://raw.githubusercontent.com/google/wuffs/67e9078eabcbda867ccc9fa912d81cba4fb0aa89/release/c/wuffs-v0.4.c
